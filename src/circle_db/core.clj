@@ -1,8 +1,8 @@
 (ns circle-db.core)
 
-;;; -------------- ;;;
-;;; Core constucts ;;;
-;;; -------------- ;;;
+;;; ------------- ;;;
+;;; DB components ;;;
+;;; ------------- ;;;
 
 (defrecord Database [layers top-id current-time])
 (defrecord Layer [storage VAET AVET VEAT EAVT])
@@ -78,3 +78,31 @@
       (make-index #(vector %1 %2 %3) #(vector %1 %2 %3) always))]
     0
     0)))
+
+;;; --------------- ;;;
+;;; Basic Accessors ;;;
+;;; --------------- ;;;
+
+(defn entity-at
+  ([db entity-id]
+   (entity-at db (:current-time db) entity-id))
+  ([db timestamp entity-id]
+   (get-entity (get-in db [:layers timestamp :storage]) entity-id)))
+
+(defn attribute-at
+  ([db entity-id attribute-name]
+   (attribute-at db entity-id attribute-name (:current-time db)))
+  ([db entity-id attribute-name timestamp]
+   (get-in (entity-at db timestamp entity-id) [:attributes attribute-name])))
+
+(defn value-of-at
+  ([db entity-id attribute-name]
+   (:value (attribute-at db entity-id attribute-name)))
+  ([db entity-id attribute-name timestamp]
+   (:value (attribute-at db entity-id attribute-name timestamp))))
+
+(defn index-at
+  ([db kind]
+   (index-at db kind (:current-time db)))
+  ([db kind timestamp]
+   (kind ((:layers db) timestamp))))
