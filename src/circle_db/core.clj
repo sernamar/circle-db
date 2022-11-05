@@ -196,6 +196,8 @@
           reffing reffing-set]
       [reffing attribute-name])))
 
+(declare update-entity)
+
 (defn- remove-back-references [db entity-id layer]
   (let [reffing-datoms (reffing-to entity-id layer)
         remove-fn (fn[_ [entity attribute]] (update-entity db
