@@ -117,3 +117,70 @@
       (let [attribute (attribute-at db entity-id attribute-name timestamp)]
         (recur (conj result {(:timestamp attribute) (:value attribute)})
                (:prev-timestamp attribute))))))
+
+;;; ---------- ;;;
+;;; Add entity ;;;
+;;; ---------- ;;;
+
+(defn- next-timestamp [db]
+  (inc (:current-time db)))
+
+(defn- update-creation-timestamp [entity timestamp-value]
+  (reduce #(assoc-in %1 [:attributes %2 :timestamp] timestamp-value)
+          entity
+          (keys (:attributes entity))))
+
+(defn- next-id [db entity]
+  (let [top-id (:top-id db)
+        entity-id (:id entity)
+        increased-id (inc top-id)]
+    (if (= entity-id :db/no-id-yet)
+      [(keyword (str increased-id)) increased-id]
+      [entity-id top-id])))
+
+(defn- fix-new-entity [db entity]
+  (let [[entity-id next-top-id] (next-id db entity)
+        new-timestamp (next-timestamp db)]
+    [(update-creation-timestamp (assoc entity :id entity-id) new-timestamp)
+     next-top-id]))
+
+(defn- collify [x]
+  (if (or (nil? x) (coll? x)) x [x]))
+
+(defn- update-entry-in-index [index path _operation]
+  (let [update-path (butlast path)
+        update-value (last path)
+        to-be-updated-set (get-in index update-path #{})]
+    (assoc-in index update-path (conj to-be-updated-set update-value))))
+
+(defn- update-attribute-in-index [index entity-id attribute-name target-value operation]
+  (let [colled-target-value (collify target-value)
+        update-entry-function (fn [index value]
+                                (update-entry-in-index index
+                                                       ((from-eav index) entity-id attribute-name value)
+                                                       operation))]
+    (reduce update-entry-function index colled-target-value)))
+
+(defn- add-entity-to-index [entity layer index-name]
+  (let [entity-id (:id entity)
+        index (index-name layer)
+        all-attributes  (vals (:attributes entity))
+        relevant-attributes (filter #((usage-predicate index) %) all-attributes)
+        add-in-index-function (fn [index attribute] 
+                                (update-attribute-in-index index entity-id (:name attribute) 
+                                                           (:value attribute) 
+                                                           :db/add))]
+    (assoc layer
+           index-name (reduce add-in-index-function index relevant-attributes))))
+
+(defn add-entity [db entity]
+  (let [[fixed-entity next-top-id] (fix-new-entity db entity)
+        layer-with-updated-storage (update-in (last (:layers db))
+                                              [:storage]
+                                              write-entity
+                                              fixed-entity)
+        add-function (partial add-entity-to-index fixed-entity)
+        new-layer (reduce add-function layer-with-updated-storage (indexes))]
+    (assoc db
+           :layers (conj (:layers db) new-layer)
+           :top-id next-top-id)))
