@@ -106,3 +106,14 @@
    (index-at db kind (:current-time db)))
   ([db kind timestamp]
    (kind ((:layers db) timestamp))))
+
+(defn evolution-of
+  "Returns a sequence of timestamp/value pairs for the attribute of the given entity."
+  [db entity-id attribute-name]
+  (loop [result []
+         timestamp (:current-time db)]
+    (if (= -1 timestamp)
+      (reverse result)
+      (let [attribute (attribute-at db entity-id attribute-name timestamp)]
+        (recur (conj result {(:timestamp attribute) (:value attribute)})
+               (:prev-timestamp attribute))))))
