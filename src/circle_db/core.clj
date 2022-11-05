@@ -253,3 +253,76 @@
                           (indexes))]
     (assoc db
            :layers (conj (:layers db) new-layer))))
+
+;;; ------------- ;;;
+;;; Update entity ;;;
+;;; ------------- ;;;
+
+(defn- update-attribute-modification-time [attribute new-timestamp]
+  (assoc attribute
+         :ts new-timestamp
+         :prev-ts (:ts attribute)))
+
+(defn single? [attribute]
+  (= :db/single (:cardinality (meta attribute))))
+
+(defn- update-attribute-value [attribute value operation]
+   (cond
+      (single? attribute) (assoc attribute :value #{value})
+      ;; now we're talking about an attribute of multiple values
+      (= :db/reset-to operation) (assoc attribute :value value)
+      (= :db/add operation) (assoc attribute :value (clojure.set/union (:value attribute) value))
+      (= :db/remove operation) (assoc attribute :value (clojure.set/difference (:value attribute) value))))
+
+(defn- update-attribute [attribute new-value new-timestamp operation]
+  {:pre [(if (single? attribute)
+           (contains? #{:db/reset-to :db/remove} operation)
+           (contains? #{:db/reset-to :db/add :db/remove} operation))]}
+  (-> attribute
+      (update-attribute-modification-time new-timestamp)
+      (update-attribute-value new-value operation)))
+
+(defn- update-index [entity-id old-attribute target-value operation layer index-name]
+  (if-not ((usage-predicate (get-in layer [index-name])) old-attribute)
+    layer
+    (let [index (index-name layer)
+          cleaned-index (remove-entries-from-index entity-id
+                                                   operation
+                                                   index
+                                                   old-attribute)
+          updated-index (if (= operation :db/remove)
+                          cleaned-index
+                          (update-attribute-in-index cleaned-index
+                                                     entity-id
+                                                     (:name old-attribute)
+                                                     target-value
+                                                     operation))]
+      (assoc layer index-name updated-index))))
+
+(defn- put-entity [storage entity-id new-attribute]
+  (assoc-in (get-entity storage entity-id)
+            [:attrs (:name new-attribute)]
+            new-attribute))
+
+(defn- update-layer [layer entity-id old-attribute updated-attribute new-value operation]
+  (let [storage (:storage layer)
+        new-layer (reduce (partial update-index entity-id old-attribute new-value operation)
+                          layer
+                          (indexes))]
+    (assoc new-layer
+           :storage (write-entity storage
+                                  (put-entity storage entity-id updated-attribute)))))
+
+(defn update-entity
+  ([db entity-id attribute-name new-value]
+   (update-entity db entity-id attribute-name new-value :db/reset-to))
+  ([db entity-id attribute-name new-value operation]
+   (let [update-timestamp (next-timestamp db)
+         layer (last (:layers db))
+         attribute (attribute-at db entity-id attribute-name)
+         updated-attribute (update-attribute attribute new-value update-timestamp operation)
+         fully-updated-layer (update-layer layer entity-id attribute updated-attribute new-value operation)]
+     (update-in db
+                [:layers]
+                conj
+                fully-updated-layer))))
