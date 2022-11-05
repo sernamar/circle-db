@@ -1,4 +1,5 @@
-(ns circle-db.core)
+(ns circle-db.core
+  (:require [clojure.set]))
 
 ;;; ------------- ;;;
 ;;; DB components ;;;
@@ -184,3 +185,71 @@
     (assoc db
            :layers (conj (:layers db) new-layer)
            :top-id next-top-id)))
+
+;;; ------------- ;;;
+;;; Remove entity ;;;
+;;; ------------- ;;;
+
+(defn- reffing-to [entity-id layer]
+  (let [vaet (:VAET layer)]
+    (for [[attribute-name reffing-set] (entity-id vaet)
+          reffing reffing-set]
+      [reffing attribute-name])))
+
+(defn- remove-back-references [db entity-id layer]
+  (let [reffing-datoms (reffing-to entity-id layer)
+        remove-fn (fn[_ [entity attribute]] (update-entity db
+                                                           entity
+                                                           attribute
+                                                           entity-id
+                                                           :db/remove))
+        clean-db (reduce remove-fn db reffing-datoms)]
+    (last (:layers clean-db))))
+
+(defn- remove-entry-from-index [index path]
+  (let [path-head (first path)
+        path-to-items (butlast path)
+        value-to-remove (last path)
+        old-entries-set (get-in index path-to-items)]
+    (cond
+      ;; the set of items does not contain the item to remove => nothing to do here
+      (not (contains? old-entries-set value-to-remove)) index
+      ;; a path that splits at the second item => just remove the unneeded part of it
+      (= 1 (count old-entries-set)) (update-in index [path-head] dissoc (second path))
+      ;; else
+      :else (update-in index path-to-items disj value-to-remove))))
+
+(defn- remove-entries-from-index
+  [entity-id operation index attribute]
+  (if (= operation :db/add)
+    index
+    (let [attribute-name (:name attribute)
+          datom-values (collify (:value attribute))
+          paths (map #((from-eav index) entity-id attribute-name %) datom-values)]
+      (reduce remove-entry-from-index index paths))))
+
+(defn- remove-entity-from-index [entity layer index-name]
+  (let [entity-id (:id entity)
+        index (index-name layer)
+        all-attributes (vals (:attributes entity))
+        relevant-attributes (filter #((usage-predicate index) %) all-attributes)
+        remove-from-index-fn (partial remove-entries-from-index
+                                      entity-id
+                                      :db/remove)]
+    (assoc layer
+           index-name (reduce remove-from-index-fn index relevant-attributes))))
+
+(defn remove-entity [db entity-id]
+  (let [entity (entity-at db entity-id)
+        layer (remove-back-references db entity-id (last (:layers db)))
+        no-reference-layer (update-in layer
+                                      [:VAET]
+                                      dissoc
+                                      entity-id)
+        no-entity-layer (assoc no-reference-layer
+                               :storage (drop-entity (:storage no-reference-layer) entity))
+        new-layer (reduce (partial remove-entity-from-index entity) 
+                          no-entity-layer
+                          (indexes))]
+    (assoc db
+           :layers (conj (:layers db) new-layer))))
