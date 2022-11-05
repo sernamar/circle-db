@@ -51,3 +51,30 @@
 (defn usage-predicate [index] (:usage-predicate (meta index)))
 
 (defn indexes[] [:VAET :AVET :VEAT :EAVT])
+
+;;; -------- ;;;
+;;; Database ;;;
+;;; -------- ;;;
+
+(defn reference? [attribute]
+  (= :db/ref (:type (meta attribute))))
+
+(defn always [& _more]
+  true)
+
+(defn make-db []
+  (atom 
+   (Database.
+    [(Layer.
+      ;; storage
+      (InMemory.)
+      ;; VAET index
+      (make-index #(vector %3 %2 %1) #(vector %3 %2 %1) #(reference? %))
+      ;; AVET index
+      (make-index #(vector %2 %3 %1) #(vector %3 %1 %2) always)
+      ;; VEAT index
+      (make-index #(vector %3 %1 %2) #(vector %2 %3 %1) always)
+      ;; EAVT index
+      (make-index #(vector %1 %2 %3) #(vector %1 %2 %3) always))]
+    0
+    0)))
