@@ -35,3 +35,19 @@
   (get-entity [storage entity-id] (entity-id storage))
   (write-entity [storage entity] (assoc storage (:id entity) entity))
   (drop-entity [storage entity] (dissoc storage (:id entity))))
+
+;;; ----------------- ;;;
+;;; Indexing the Data ;;;
+;;; ----------------- ;;;
+
+(defn make-index [from-eav to-eav usage-predicate]
+  (with-meta {}
+    {:from-eav from-eav
+     :to-eav to-eav
+     :usage-predicate usage-predicate}))
+
+(defn from-eav [index] (:from-eav (meta index)))
+(defn to-eav [index] (:to-eav (meta index)))
+(defn usage-predicate [index] (:usage-predicate (meta index)))
+
+(defn indexes[] [:VAET :AVET :VEAT :EAVT])
