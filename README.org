@@ -1,0 +1,2 @@
+* circle-db
+A funtional database based on [[https://www.aosabook.org/en/500L/an-archaeology-inspired-database.html][An Archaeology-Inspired Database]].
