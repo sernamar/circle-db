@@ -251,3 +251,38 @@
                 [:layers]
                 conj
                 fully-updated-layer))))
+
+;;; ------------ ;;;
+;;; Transactions ;;;
+;;; ------------ ;;;
+
+(defn transact-on-db [initial-db operations]
+  (loop [[operation & rest-operations] operations
+         transacted initial-db]
+    (if operation
+      (recur rest-operations (apply (first operation) transacted (rest operation)))
+      (let [initial-layer (:layers initial-db)
+            new-layer (last (:layers transacted))]
+        (assoc initial-db
+               :layers (conj initial-layer new-layer) 
+               :curr-time (next-timestamp initial-db) 
+               :top-id (:top-id transacted))))))
+
+(defmacro _transact [db operation & transactions]
+  (when transactions
+    (loop [[first-transaction & rest-transactions] transactions
+           result  [operation db `transact-on-db]
+           accumulated-transactions []]
+      (if first-transaction
+        (recur rest-transactions
+               result
+               (conj accumulated-transactions (vec first-transaction)))
+        (list* (conj result accumulated-transactions))))))
+
+(defmacro transact [db-conn & transactions]
+  `(_transact ~db-conn swap! ~@transactions))
+
+(defn- _what-if [db function transactions]  (function db transactions))
+
+(defmacro what-if [db & operations]
+  `(_transact ~db _what-if  ~@operations))
