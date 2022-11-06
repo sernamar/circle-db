@@ -1,84 +1,7 @@
 (ns circle-db.core
-  (:require [clojure.set]))
-
-;;; ------------- ;;;
-;;; DB components ;;;
-;;; ------------- ;;;
-
-(defrecord Database [layers top-id current-time])
-(defrecord Layer [storage VAET AVET VEAT EAVT])
-(defrecord Entity [id attributes])
-(defrecord Attribute [name value timestamp previous-timestamp])
-
-(defn make-entity
-  ([] (make-entity :db/no-id-yet))
-  ([id] (Entity. id {})))
-
-(defn make-attribute [name value type & {:keys [cardinality] :or {cardinality :db/single}}]
-  {:pre [(contains? #{:db/single :db/multiple} cardinality)]}
-  (with-meta (Attribute. name value -1 -1) {:type type :cardinality cardinality}))
-
-(defn add-attribute [entity attribute]
-   (let [attribute-id (keyword (:name attribute))]
-      (assoc-in entity [:attributes attribute-id] attribute)))
-
-;;; ------- ;;;
-;;; Storage ;;;
-;;; ------- ;;;
-
-(defprotocol Storage
-  (get-entity [storage entity-id])
-  (write-entity [storage entity])
-  (drop-entity [storage entity]))
-
-(defrecord InMemory []
-  Storage
-  (get-entity [storage entity-id] (entity-id storage))
-  (write-entity [storage entity] (assoc storage (:id entity) entity))
-  (drop-entity [storage entity] (dissoc storage (:id entity))))
-
-;;; ----------------- ;;;
-;;; Indexing the Data ;;;
-;;; ----------------- ;;;
-
-(defn make-index [from-eav to-eav usage-predicate]
-  (with-meta {}
-    {:from-eav from-eav
-     :to-eav to-eav
-     :usage-predicate usage-predicate}))
-
-(defn from-eav [index] (:from-eav (meta index)))
-(defn to-eav [index] (:to-eav (meta index)))
-(defn usage-predicate [index] (:usage-predicate (meta index)))
-
-(defn indexes[] [:VAET :AVET :VEAT :EAVT])
-
-;;; -------- ;;;
-;;; Database ;;;
-;;; -------- ;;;
-
-(defn reference? [attribute]
-  (= :db/ref (:type (meta attribute))))
-
-(defn always [& _more]
-  true)
-
-(defn make-db []
-  (atom 
-   (Database.
-    [(Layer.
-      ;; storage
-      (InMemory.)
-      ;; VAET index
-      (make-index #(vector %3 %2 %1) #(vector %3 %2 %1) #(reference? %))
-      ;; AVET index
-      (make-index #(vector %2 %3 %1) #(vector %3 %1 %2) always)
-      ;; VEAT index
-      (make-index #(vector %3 %1 %2) #(vector %2 %3 %1) always)
-      ;; EAVT index
-      (make-index #(vector %1 %2 %3) #(vector %1 %2 %3) always))]
-    0
-    0)))
+  (:require [circle-db.components :as components]
+            [circle-db.storage :as storage]
+            [clojure.set]))
 
 ;;; --------------- ;;;
 ;;; Basic Accessors ;;;
@@ -88,7 +11,7 @@
   ([db entity-id]
    (entity-at db (:current-time db) entity-id))
   ([db timestamp entity-id]
-   (get-entity (get-in db [:layers timestamp :storage]) entity-id)))
+   (storage/get-entity (get-in db [:layers timestamp :storage]) entity-id)))
 
 (defn attribute-at
   ([db entity-id attribute-name]
@@ -158,7 +81,7 @@
   (let [colled-target-value (collify target-value)
         update-entry-function (fn [index value]
                                 (update-entry-in-index index
-                                                       ((from-eav index) entity-id attribute-name value)
+                                                       ((components/from-eav index) entity-id attribute-name value)
                                                        operation))]
     (reduce update-entry-function index colled-target-value)))
 
@@ -166,7 +89,7 @@
   (let [entity-id (:id entity)
         index (index-name layer)
         all-attributes  (vals (:attributes entity))
-        relevant-attributes (filter #((usage-predicate index) %) all-attributes)
+        relevant-attributes (filter #((components/usage-predicate index) %) all-attributes)
         add-in-index-function (fn [index attribute] 
                                 (update-attribute-in-index index entity-id (:name attribute) 
                                                            (:value attribute) 
@@ -178,10 +101,10 @@
   (let [[fixed-entity next-top-id] (fix-new-entity db entity)
         layer-with-updated-storage (update-in (last (:layers db))
                                               [:storage]
-                                              write-entity
+                                              storage/write-entity
                                               fixed-entity)
         add-function (partial add-entity-to-index fixed-entity)
-        new-layer (reduce add-function layer-with-updated-storage (indexes))]
+        new-layer (reduce add-function layer-with-updated-storage (components/indexes))]
     (assoc db
            :layers (conj (:layers db) new-layer)
            :top-id next-top-id)))
@@ -227,14 +150,14 @@
     index
     (let [attribute-name (:name attribute)
           datom-values (collify (:value attribute))
-          paths (map #((from-eav index) entity-id attribute-name %) datom-values)]
+          paths (map #((components/from-eav index) entity-id attribute-name %) datom-values)]
       (reduce remove-entry-from-index index paths))))
 
 (defn- remove-entity-from-index [entity layer index-name]
   (let [entity-id (:id entity)
         index (index-name layer)
         all-attributes (vals (:attributes entity))
-        relevant-attributes (filter #((usage-predicate index) %) all-attributes)
+        relevant-attributes (filter #((components/usage-predicate index) %) all-attributes)
         remove-from-index-fn (partial remove-entries-from-index
                                       entity-id
                                       :db/remove)]
@@ -249,10 +172,10 @@
                                       dissoc
                                       entity-id)
         no-entity-layer (assoc no-reference-layer
-                               :storage (drop-entity (:storage no-reference-layer) entity))
+                               :storage (storage/drop-entity (:storage no-reference-layer) entity))
         new-layer (reduce (partial remove-entity-from-index entity) 
                           no-entity-layer
-                          (indexes))]
+                          (components/indexes))]
     (assoc db
            :layers (conj (:layers db) new-layer))))
 
@@ -285,7 +208,7 @@
       (update-attribute-value new-value operation)))
 
 (defn- update-index [entity-id old-attribute target-value operation layer index-name]
-  (if-not ((usage-predicate (get-in layer [index-name])) old-attribute)
+  (if-not ((components/usage-predicate (get-in layer [index-name])) old-attribute)
     layer
     (let [index (index-name layer)
           cleaned-index (remove-entries-from-index entity-id
@@ -302,7 +225,7 @@
       (assoc layer index-name updated-index))))
 
 (defn- put-entity [storage entity-id new-attribute]
-  (assoc-in (get-entity storage entity-id)
+  (assoc-in (storage/get-entity storage entity-id)
             [:attrs (:name new-attribute)]
             new-attribute))
 
@@ -310,10 +233,10 @@
   (let [storage (:storage layer)
         new-layer (reduce (partial update-index entity-id old-attribute new-value operation)
                           layer
-                          (indexes))]
+                          (components/indexes))]
     (assoc new-layer
-           :storage (write-entity storage
-                                  (put-entity storage entity-id updated-attribute)))))
+           :storage (storage/write-entity storage
+                                          (put-entity storage entity-id updated-attribute)))))
 
 (defn update-entity
   ([db entity-id attribute-name new-value]
