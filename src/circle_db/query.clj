@@ -1,4 +1,5 @@
-(ns circle-db.query)
+(ns circle-db.query
+  (:require [circle-db.core :refer [index-at]]))
 
 ;;; -------------- ;;;
 ;;; Transformation ;;;
@@ -54,4 +55,25 @@
       (recur rest-clauses
              `(conj ~predicates (pred-clause ~clause))))))
 
+;;; ------------- ;;;
+;;; Making a Plan ;;;
+;;; ------------- ;;;
 
+(defn index-of-joining-variable [query-clauses]
+  (let [metas (map #(:db/variable (meta %)) query-clauses) 
+        collapsing-fn (fn [accumulated value]
+                        (map #(when (= %1 %2) %1) accumulated value))
+        collapsed (reduce collapsing-fn metas)]
+    (first
+     (keep-indexed #(when (variable? %2 false) %1)
+                   collapsed))))
+
+(declare single-index-query-plan)
+
+(defn build-query-plan [query]
+  (let [term-index (index-of-joining-variable query)
+        index-to-use (case term-index
+                       0 :AVET
+                       1 :VEAT
+                       2 :EAVT)]
+    (partial single-index-query-plan query index-to-use)))
