@@ -152,3 +152,32 @@
 
 (defn unify [binded-res-col needed-vars]
   (map (partial locate-vars-in-query-res needed-vars) binded-res-col))
+
+;;; ---------------- ;;;
+;;; Running the Show ;;;
+;;; ---------------- ;;;
+
+(defmacro predicate-clause [clause]
+  (loop [[term & rest-term] clause
+         exprs []
+         metas [] ]
+    (if term
+      (recur rest-term
+             (conj exprs `(clause-term-expression ~ term))
+             (conj metas `(clause-term-meta ~ term)))
+      (with-meta exprs {:db/variable metas}))))
+
+(defmacro q-clauses-to-predicate-clauses [clauses]
+  (loop [[clause & rest-clauses] clauses
+         preds-vecs []]
+    (if-not clause
+      preds-vecs
+      (recur rest-clauses
+             `(conj ~preds-vecs (predicate-clause ~clause))))))
+
+(defmacro q [db query]
+  `(let [predicate-clauses (q-clauses-to-predicate-clauses ~(:where query)) 
+         needed-variables (symbol-col-to-set  ~(:find query))
+         query-plan (build-query-plan predicate-clauses)
+         query-internal-result (query-plan ~db)]
+     (unify query-internal-result needed-variables)))
