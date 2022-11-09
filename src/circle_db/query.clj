@@ -131,3 +131,24 @@
 (defn single-index-query-plan [query index db]
   (let [query-result (query-index (index-at db index) query)]
     (bind-variables-to-query query-result (index-at db index))))
+
+;;; ---------------- ;;;
+;;; Unify and Report ;;;
+;;; ---------------- ;;;
+
+(defn resultify-bind-pair [variables-set accumulator pair]
+  (let [[var-name _] pair]
+    (if (contains? variables-set var-name)
+      (conj accumulator pair)
+      accumulator)))
+
+(defn resultify-av-pair [variables-set result av-pair]
+  (reduce (partial resultify-bind-pair variables-set) result av-pair))
+
+(defn locate-vars-in-query-res [variables-set query-result]
+  (let [[entry-pair av-map]  query-result
+        entry-res (resultify-bind-pair variables-set [] entry-pair)]
+    (map (partial resultify-av-pair variables-set entry-res)  av-map)))
+
+(defn unify [binded-res-col needed-vars]
+  (map (partial locate-vars-in-query-res needed-vars) binded-res-col))
